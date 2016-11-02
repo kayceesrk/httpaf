@@ -496,3 +496,28 @@ module Response : sig
 
   val pp_hum : Format.formatter -> t -> unit
 end
+
+
+module Bigstring : sig
+  type t =
+    (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
+  val create : int -> t
+  val of_string : ?off:int -> ?len:int -> string -> t
+
+  val length : t -> int
+
+  val get : t -> int -> char
+  val unsafe_get : t -> int -> char
+
+  val set : t -> int -> char -> unit
+  val unsafe_set : t -> int -> char -> unit
+
+  val sub : off:int -> ?len:int -> t -> t
+  val copy : ?off:int -> ?len:int -> t -> string
+
+  val blit : t -> int -> t -> int -> int -> unit
+  val blit_from_string : string  -> int -> t -> int -> int -> unit
+  val blit_from_bytes  : Bytes.t -> int -> t -> int -> int -> unit
+
+end
