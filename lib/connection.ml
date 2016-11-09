@@ -251,3 +251,115 @@ module Writer = struct
         | `Closed -> close t
         | `Ok len -> F.shift t.encoder len)
 end
+
+module Rd = struct
+  type handlers =
+    { mutable start_response : (unit -> unit) list
+    ; mutable close_response : (unit -> unit) list
+    ; mutable response_chunk : (unit -> unit) list
+    }
+
+  type response_state =
+    | Waiting of handlers
+    | Started of Response.t * Body.W.t
+
+  type t =
+    { request                 : Request.t
+    ; request_body            : Body.R.t
+    ; buffered_response_bytes : int ref
+    ; mutable response_state  : response_state
+    }
+
+  let empty_handlers () =
+    { start_response = []
+    ; close_response = []
+    ; response_chunk = []
+    }
+
+  let create request request_body =
+    { request
+    ; request_body
+    ; buffered_response_bytes = ref 0
+    ; response_state          = Waiting (empty_handlers ())
+    }
+
+  let finish_request t =
+    Body.close t.request_body
+
+  let start_response t response response_body =
+    match t.response_state with
+    | Started _        -> assert false
+    | Waiting handlers ->
+      t.response_state <- Started(response, response_body);
+      List.iter (fun f -> Body.on_close response_body f) handlers.close_response;
+      List.iter (fun f -> f ()) handlers.start_response;
+      List.iter (fun f -> Body.on_more_output_available response_body f)
+        handlers.response_chunk
+  ;;
+
+  let persistent_connection t =
+    Request.persistent_connection t.request
+    && match t.response_state with
+    | Waiting _            -> true
+    | Started(response, _) -> Response.persistent_connection response
+
+  let requires_input { request_body } =
+    not (Body.is_closed request_body)
+
+  let requires_output { response_state } =
+    match response_state with
+    | Waiting _                 -> true
+    | Started(_, response_body) ->
+      Body.(has_pending_output response_body || not (is_closed response_body))
+
+  let is_complete t =
+    not (requires_input t || requires_output t)
+
+  let flush_request_body t =
+    if Body.has_pending_output t.request_body then
+      Body.execute_read t.request_body
+
+  let flush_response_body t writer =
+    match t.response_state with
+    | Waiting _                        -> ()
+    | Started(response, response_body) ->
+      let faraday = response_body.Body.faraday in
+      begin match Faraday.operation faraday with
+      | `Yield | `Close -> ()
+      | `Writev iovecs ->
+        let buffered = t.buffered_response_bytes in
+        let iovecs   = IOVec.shiftv iovecs !buffered in
+        let lengthv  = IOVec.lengthv iovecs in
+        buffered := !buffered + lengthv;
+        let request_method = t.request.Request.meth in
+        begin match Response.body_length ~request_method response with
+        | `Fixed _ | `Close_delimited -> Writer.schedule_fixed writer iovecs
+        | `Chunked -> Writer.schedule_chunk writer iovecs
+        | `Error _ -> assert false
+        end;
+        Writer.flush writer (fun () ->
+          Faraday.shift faraday lengthv;
+          buffered := !buffered - lengthv)
+      end
+
+  let on_more_output_available t k =
+    match t.response_state with
+    | Waiting handlers          -> handlers.response_chunk <- k::handlers.response_chunk
+    | Started(_, response_body) -> Body.on_more_output_available response_body k
+
+  let on_response_available t k =
+    match t.response_state with
+    | Waiting handlers          -> handlers.start_response <- k::handlers.start_response
+    | Started(_, response_body) -> k ()
+
+  let on_response_complete t k =
+    match t.response_state with
+    | Waiting handlers          -> handlers.close_response <- k::handlers.close_response
+    | Started(_, response_body) -> Body.on_close response_body k
+
+  let invariant t =
+    let (=>) a b = b || not a in
+    assert (is_complete t => not (requires_input t));
+    assert (is_complete t => not (requires_output t));
+  ;;
+end
