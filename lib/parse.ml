@@ -32,7 +32,7 @@
   ----------------------------------------------------------------------------*)
 
 
-include Angstrom
+include Angstrom.Z
 
 module P = struct
   let is_colon =
@@ -151,6 +151,12 @@ let schedule_size writer n =
   then advance n
   else take n >>| fun s -> Body.schedule_string writer s
   end *> commit
+
+let at_end_of_input =
+  peek_char
+  >>| function
+    | None   -> true
+    | Some _ -> false
 
 let rec body ~encoding writer =
   let rec fixed n ~unexpected =

@@ -66,16 +66,19 @@ module Reader = struct
   let parser handler =
     let open Parse in
     let ok = return (Ok ()) in
-    request >>= fun request ->
-    match Request.body_length request with
-    | `Error err -> return (Error err)
-    | `Fixed 0L  ->
-			handler request Body.R.empty;
-      ok
-    | `Fixed _ | `Chunked | `Close_delimited as encoding ->
-      let request_body, writer = Body.create ~buffer_size:0 () in
-      handler request request_body;
-      body ~encoding writer *> ok
+    let p =
+      request >>= fun request ->
+      match Request.body_length request with
+      | `Error err -> return (Error err)
+      | `Fixed 0L  ->
+        handler request Body.R.empty;
+        ok
+      | `Fixed _ | `Chunked | `Close_delimited as encoding ->
+        let request_body, writer = Body.create ~buffer_size:0 () in
+        handler request request_body;
+        body ~encoding writer *> ok
+    in
+    Angstrom.z p
 
   let create ?(buffer_size=0x1000) handler =
     let buffer = Bigstring.create buffer_size in
