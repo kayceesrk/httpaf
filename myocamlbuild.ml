@@ -1,5 +1,5 @@
 (* OASIS_START *)
-(* DO NOT EDIT (digest: 9c528c301e3367afb4fa6ffd16ef234c) *)
+(* DO NOT EDIT (digest: 07d3f61a15ab65c29106bb592baf9098) *)
 module OASISGettext = struct
 (* # 22 "src/oasis/OASISGettext.ml" *)
 
@@ -767,10 +767,53 @@ end
 open Ocamlbuild_plugin;;
 let package_default =
   {
-     MyOCamlbuildBase.lib_ocaml = [("httpaf", ["lib"], [])];
+     MyOCamlbuildBase.lib_ocaml =
+       [("httpaf", ["lib"], []); ("httpaf_async", ["async"], [])];
      lib_c = [];
-     flags = [];
-     includes = [("lib_test", ["lib"])]
+     flags =
+       [
+          (["oasis_library_httpaf_native"; "ocaml"; "link"; "native"],
+            [(OASISExpr.EBool true, S [A "-S"; A "-g"])]);
+          (["oasis_library_httpaf_native"; "ocaml"; "ocamldep"; "native"],
+            [(OASISExpr.EBool true, S [A "-S"; A "-g"])]);
+          (["oasis_library_httpaf_native"; "ocaml"; "compile"; "native"],
+            [(OASISExpr.EBool true, S [A "-S"; A "-g"])]);
+          (["oasis_library_httpaf_async_native"; "ocaml"; "link"; "native"],
+            [(OASISExpr.EBool true, S [A "-g"])]);
+          ([
+              "oasis_library_httpaf_async_native";
+              "ocaml";
+              "ocamldep";
+              "native"
+           ],
+            [(OASISExpr.EBool true, S [A "-g"])]);
+          (["oasis_library_httpaf_async_native"; "ocaml"; "compile"; "native"
+           ],
+            [(OASISExpr.EBool true, S [A "-g"])]);
+          ([
+              "oasis_executable_wrk_async_benchmark_native";
+              "ocaml";
+              "link";
+              "native"
+           ],
+            [(OASISExpr.EBool true, S [A "-g"])]);
+          ([
+              "oasis_executable_wrk_async_benchmark_native";
+              "ocaml";
+              "ocamldep";
+              "native"
+           ],
+            [(OASISExpr.EBool true, S [A "-g"])]);
+          ([
+              "oasis_executable_wrk_async_benchmark_native";
+              "ocaml";
+              "compile";
+              "native"
+           ],
+            [(OASISExpr.EBool true, S [A "-g"])])
+       ];
+     includes =
+       [("lib_test", ["lib"]); ("benchmarks", ["async"]); ("async", ["lib"])]
   }
   ;;
 
@@ -778,6 +821,6 @@ let conf = {MyOCamlbuildFindlib.no_automatic_syntax = false}
 
 let dispatch_default = MyOCamlbuildBase.dispatch_default conf package_default;;
 
-# 782 "myocamlbuild.ml"
+# 825 "myocamlbuild.ml"
 (* OASIS_STOP *)
 Ocamlbuild_plugin.dispatch dispatch_default;;
