@@ -619,17 +619,23 @@ module Connection : sig
   (** [create ?config handler] creates a connection handler that will service
       individual requests with [handler]. *)
 
-  val next_read : t -> [
-    | `Read  of Bigstring.t * ([`Ok of int | `Eof] -> (unit, [`Invalid_read_length]) result)
-    | `Yield of (unit -> unit) -> unit
-    | `Close of (unit, [Status.t|`Parse of string list * string]) result
+  val next_read_operation : t -> [
+    | `Read  of Bigstring.t
+    | `Yield
+    | `Close of (unit, [Status.t | `Parse of string list * string]) result
     ]
 
-  val next_write : t -> [
-    | `Write of IOVec.buffer IOVec.t list * ([`Ok of int | `Closed] -> unit)
-    | `Yield of (unit -> unit) -> unit
+  val report_read_result : t -> [`Ok of int | `Eof] -> unit
+  val yield_reader : t -> (unit -> unit) -> unit
+
+  val next_write_operation : t -> [
+    | `Write of IOVec.buffer IOVec.t list
+    | `Yield
     | `Close of int
-    ]
+  ]
+
+  val report_write_result : t -> [`Ok of int | `Closed] -> unit
+  val yield_writer : t -> (unit -> unit) -> unit
 
   val shutdown_reader : t -> unit
   val shutdown : t -> unit

@@ -116,56 +116,53 @@ module Reader = struct
       t.len <- t.len - n
     end
 
-  let update_parse_state t parse_state =
-    match parse_state with
-    | AU.Done(_, 0) | AU.Fail _ -> t.parse_state <- parse_state
-    | AU.Done(result, committed) ->
-      commit t committed;
-      t.parse_state <- AU.Done(result, 0);
-    | AU.Partial { AU.committed; continue } ->
-      commit t committed;
-      t.parse_state <- AU.(Partial { committed = 0; continue })
-
   let buffer_for_reading { buffer; off; len } =
     `Bigstring (Bigstring.sub ~off ~len buffer)
+
+  let update_parse_state t more =
+    match t.parse_state with
+    | AU.Fail _                 -> failwith "parse failed"
+    | AU.Done(Error _, _)       -> failwith "NYI"
+    | AU.Done(Ok (), committed) ->
+      commit t committed;
+      if more = AU.Incomplete
+      then t.parse_state <- AU.parse (parser t.handler);
+    | AU.Partial { AU.continue; committed } ->
+      commit t committed;
+      t.parse_state <- continue (buffer_for_reading t) more
+
+  let report_result t result =
+    match result with
+    | `Ok 0   -> ()
+    | `Ok len ->
+      let len = t.len + len in
+      if len <= Bigstring.length t.buffer then begin
+        t.len <- len;
+        update_parse_state t AU.Incomplete
+      end else
+        failwith "Reader.report_result size of read exceeds size of buffer"
+    | `Eof ->
+      close t
 
   let rec next t =
     match t.parse_state with
     | AU.Done(result, n) ->
-      assert (n = 0);
       begin match result with
       | Ok () as result ->
-        if t.closed then
-          `Close result
-        else begin
-          update_parse_state t (AU.parse (parser t.handler));
-          next t
-        end
+        if t.closed then `Close result
+        else begin update_parse_state t AU.Incomplete; next t end
       | Error err as result -> `Close result
       end
     | AU.Fail(marks , message)  ->
       `Close (Error (`Parse(marks, message)))
-    | AU.Partial p              ->
-      let { AU.continue } = p in
-      if t.closed then begin
-        update_parse_state t (continue (buffer_for_reading t) AU.Complete);
-        next t
-      end else
+    | AU.Partial { AU.committed } ->
+      assert (committed = 0);
+      if t.closed then begin update_parse_state t AU.Complete; next t end
+      else
         let { buffer; off; len } = t in
         if len = Bigstring.length buffer
-        then `Close (Error (`Parse([], "parser stall: input too large")))
-        else
-          `Read(Bigstring.sub ~off:(off + len) buffer, function
-            | `Ok 0   -> Ok ()
-            | `Ok len ->
-              let len' = t.len + len in
-              if len' <= Bigstring.length t.buffer then begin
-                t.len <- len';
-                update_parse_state t (continue (buffer_for_reading t) AU.Incomplete);
-                Ok ()
-              end else
-                Error `Invalid_read_length
-            | `Eof    -> close t; Ok ())
+        then `Close(Error (`Parse([], "parser stall: input too large")))
+        else `Read(Bigstring.sub ~off:(off + len) buffer)
 end
 
 module Writer = struct
@@ -244,15 +241,18 @@ module Writer = struct
   let drained_bytes t =
     t.drained_bytes
 
+  let report_result t result =
+    match result with
+    | `Closed -> close t
+    | `Ok len -> F.shift t.encoder len
+
   let next t =
     match F.operation t.encoder with
     | `Close -> `Close (drained_bytes t)
     | `Yield -> `Yield
     | `Writev iovecs ->
       assert (not (t.closed));
-      `Write ((iovecs:IOVec.buffer IOVec.t list), function
-        | `Closed -> close t
-        | `Ok len -> F.shift t.encoder len)
+      `Write ((iovecs:IOVec.buffer IOVec.t list))
 end
 
 module Rd = struct
@@ -500,55 +500,47 @@ let advance_request_queue_if_necessary t =
         shutdown_reader t
     end
 
-let flush_request_body t next_read =
-  let flush () =
-    begin match t.current_request with
-    | None    -> ()
-    | Some rd -> Rd.flush_request_body rd
+let rec next_read_operation t =
+  advance_request_queue_if_necessary t;
+  match t.current_request with
+  | None -> Reader.next t.reader
+  | Some rd ->
+    if Rd.requires_input rd then Reader.next t.reader
+    else if Rd.persistent_connection rd
+    then `Yield
+    else begin
+      shutdown_reader t;
+      next_read_operation t
     end
-  in
-  match next_read with
-  | `Close _ as close -> flush (); close
-  | `Read(buffer, k) ->
-    `Read(buffer, fun n ->
-      match k n with
-      | Ok () as result -> flush (); result
-      | error           -> error)
+
+let report_read_result t result =
+  Reader.report_result t.reader result;
+  match t.current_request with
+  | None    -> ()
+  | Some rd -> Rd.flush_request_body rd
+
+let yield_reader t k =
+  on_flush t k
 
 let flush_response_body t =
   match t.current_request with
   | None    -> ()
   | Some rd -> Rd.flush_response_body rd t.writer
 
-let rec next_read t =
-  advance_request_queue_if_necessary t;
-  match t.current_request with
-  | None    -> flush_request_body t (Reader.next t.reader)
-  | Some rd ->
-    if Rd.requires_input rd
-    then flush_request_body t (Reader.next t.reader)
-    else if Rd.persistent_connection rd
-    then `Yield (fun cb -> on_flush t cb)
-    else begin
-      shutdown_reader t;
-      next_read t
-    end
-
-let rec next_write t =
+let rec next_write_operation t =
   advance_request_queue_if_necessary t;
   flush_response_body t;
-  match Writer.next t.writer with
-  | `Write _ | `Close _ as next -> next
-  | `Yield ->
-    begin match t.current_request with
-    | None    -> `Yield (fun cb -> on_advance t cb)
-    | Some rd ->
-      if Rd.requires_output rd
-      then `Yield (fun cb -> Rd.on_more_output_available rd cb)
-      else if Rd.persistent_connection rd
-      then `Yield (fun cb -> on_advance t cb)
-      else begin
-        shutdown t;
-        next_write t
-      end
-    end
+  Writer.next t.writer
+
+let report_write_result t result =
+  Writer.report_result t.writer result
+
+let yield_writer t k =
+  match t.current_request with
+  | None    -> on_advance t k
+  | Some rd ->
+    if Rd.requires_output rd
+    then Rd.on_more_output_available rd k
+    else if Rd.persistent_connection rd
+    then on_advance t k
+    else begin shutdown t; k () end

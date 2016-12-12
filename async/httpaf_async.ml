@@ -57,34 +57,32 @@ let create_connection_handler ?config ~request_handler =
         Log.Global.error "%s" (Exn.to_string exn);
     in
     let rec reader_thread () =
-      match Connection.next_read conn with
-      | `Read(buffer, k) ->
+      match Connection.next_read_operation conn with
+      | `Read buffer ->
         (* Log.Global.printf "read(%d)%!" (Fd.to_int_exn fd); *)
         read buffer >>= fun result ->
-        begin match k result with
-        | Ok ()     -> reader_thread ()
-        | Error err -> assert false
-        end
-      | `Yield register  ->
+        Connection.report_read_result conn result;
+        reader_thread ()
+      | `Yield  ->
         (* Log.Global.printf "read_yield(%d)%!" (Fd.to_int_exn fd); *)
         let ivar = Ivar.create () in
-        register (fun () -> Ivar.fill ivar ());
+        Connection.yield_reader conn (fun () -> Ivar.fill ivar ());
         Ivar.read ivar >>= reader_thread
       | `Close _ ->
         (* Log.Global.printf "read_close(%d)%!" (Fd.to_int_exn fd); *)
         Socket.shutdown socket `Receive; Deferred.unit
     in
     let rec writer_thread () =
-      match Connection.next_write conn with
-      | `Write(iovecs, k) ->
+      match Connection.next_write_operation conn with
+      | `Write iovecs ->
         (* Log.Global.printf "write(%d)%!" (Fd.to_int_exn fd); *)
         writev iovecs >>= fun result ->
-        k result;
+        Connection.report_write_result conn result;
         writer_thread ()
-      | `Yield register ->
+      | `Yield ->
         (* Log.Global.printf "write_yield(%d)%!" (Fd.to_int_exn fd); *)
         let ivar = Ivar.create () in
-        register (fun () -> Ivar.fill ivar ());
+        Connection.yield_writer conn (fun () -> Ivar.fill ivar ());
         Ivar.read ivar >>= writer_thread
       | `Close _ ->
         (* Log.Global.printf "write_close(%d)%!" (Fd.to_int_exn fd); *)

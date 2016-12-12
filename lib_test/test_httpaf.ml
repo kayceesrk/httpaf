@@ -74,24 +74,18 @@ let test ~msg ~input ~output ~handler =
     if !iwait
     then begin debug " iloop: wait"; input end
     else
-      match Connection.next_read conn, input with
-      | `Read(buffer, k), s::input' ->
+      match Connection.next_read_operation conn, input with
+      | `Read buffer, s::input' ->
         debug " iloop: read";
         let len = min (Bigstring.length buffer) (String.length s) in
         Bigstring.blit_from_string s 0 buffer 0 len;
-        begin match k (`Ok len) with
-        | Ok () -> ()
-        | Error `Invalid_read_length -> assert false
-        end;
+        Connection.report_read_result conn (`Ok len);
         if len = String.length s
         then input'
         else String.(sub s len (length s - len)) :: input'
-      | `Read(_, k), [] ->
+      | `Read _, [] ->
         debug " iloop: eof";
-        begin match k `Eof with
-        | Ok () -> ()
-        | Error `Invalid_read_length -> assert false
-        end;
+        Connection.report_read_result conn `Eof;
         []
       | _          , [] ->
         debug " iloop: eof";
@@ -102,29 +96,29 @@ let test ~msg ~input ~output ~handler =
       | `Close (Ok _)   , _     ->
         debug " iloop: close(ok)";
         Connection.shutdown_reader conn; []
-      | `Yield rk  , _  ->
+      | `Yield , _  ->
         debug " iloop: yield";
         iwait := true;
-        rk (fun () -> debug " iloop: continue"; iwait := false);
+        Connection.yield_reader conn (fun () -> debug " iloop: continue"; iwait := false);
         input
   and oloop conn =
     if !owait
     then (begin debug " oloop: wait"; [] end)
     else
-      match Connection.next_write conn with
+      match Connection.next_write_operation conn with
       | `Close _  ->
         debug " oloop: closed";
         Connection.shutdown conn;
         []
-      | `Yield rk ->
+      | `Yield ->
         debug " oloop: yield";
         owait := true;
-        rk (fun () -> debug " oloop: continue"; owait := false);
+        Connection.yield_writer conn (fun () -> debug " oloop: continue"; owait := false);
         []
-      | `Write(iovecs, k) ->
+      | `Write iovecs ->
         debug " oloop: write";
         let output = List.map iovec_to_string iovecs in
-        k (`Ok (IOVec.lengthv iovecs));
+        Connection.report_write_result conn (`Ok (IOVec.lengthv iovecs));
         output
   in
   debug ("=== " ^ msg);
