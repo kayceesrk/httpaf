@@ -363,3 +363,189 @@ module Rd = struct
     assert (is_complete t => not (requires_output t));
   ;;
 end
+
+module Config = struct
+  type t =
+    { read_buffer_size        : int
+    ; write_buffer_size       : int
+    }
+
+  let default =
+    { read_buffer_size        = 0x1000
+    ; write_buffer_size       = 0x1000 }
+end
+
+type handler =
+  Request.t -> Body.R.t -> (Response.t -> Body.W.t) -> unit
+
+type t =
+  { reader                  : Reader.t
+  ; writer                  : Writer.t
+  ; user_handler            : handler
+  ; request_queue           : Rd.t Queue.t
+  ; mutable current_request : Rd.t option
+  ; mutable on_advance      : (unit -> unit) list
+  ; mutable on_flush        : (unit -> unit) list
+  }
+
+let invariant t =
+  let (=>) a b = b || (not a) in
+  Reader.invariant t.reader;
+  Writer.invariant t.writer;
+  assert (t.current_request = None => Queue.is_empty t.request_queue);
+  assert (t.writer.Writer.closed => t.reader.Reader.closed);
+;;
+
+let create ?(config=Config.default) user_handler =
+  let
+    { Config
+    . read_buffer_size
+    ; write_buffer_size
+    } = config
+  in
+  let request_queue = Queue.create () in
+  let handler request request_body =
+    Queue.push (Rd.create request request_body) request_queue in
+  { reader          = Reader.create ~buffer_size:read_buffer_size handler
+  ; writer          = Writer.create ~buffer_size:write_buffer_size ()
+  ; user_handler
+  ; current_request = None
+  ; request_queue
+  ; on_advance      = []
+  ; on_flush        = []
+  }
+
+let state t =
+  match t.reader.Reader.closed, t.writer.Writer.closed with
+  | false, false -> `Running
+  | true , true  -> `Closed
+  | true , false -> `Closed_input
+  | false, true  -> assert false
+
+let on_flush t k =
+  if state t = `Closed
+  then failwith "on flush on closed conn"
+  else t.on_flush <- k::t.on_advance
+
+let on_advance t k =
+  if state t = `Closed
+  then failwith "on_advanced on closed conn"
+  else t.on_advance <- k::t.on_advance
+
+let fire_advance t =
+  let callbacks = t.on_advance in
+  t.on_advance <- [];
+  List.iter (fun f -> f ()) callbacks
+
+let fire_flush t =
+  let callbacks = t.on_flush in
+  t.on_flush <- [];
+  List.iter (fun f -> f ()) callbacks
+
+let shutdown_reader t =
+  Reader.close t.reader
+
+let shutdown_writer t =
+  Writer.close t.writer
+
+let shutdown t =
+  shutdown_reader t;
+  shutdown_writer t;
+  fire_advance t
+
+let drain_request_queue t =
+  Queue.iter (fun rd -> Rd.finish_request rd) t.request_queue;
+  Queue.clear t.request_queue;
+  fire_advance t
+
+let advance_request_queue t =
+  let { Rd.request; request_body } as rd = Queue.take t.request_queue in
+  t.current_request <- Some rd;
+  let request_method = request.Request.meth in
+  t.user_handler request request_body (fun response ->
+    match Response.body_length ~request_method response with
+    | `Error err -> assert false (* XXX(seliopou): handle *)
+    | _          ->
+      Writer.write_response t.writer response;
+      let _, response_body = Body.create () in (* XXX(seliopou): buffer size *)
+      Rd.start_response rd response response_body;
+      response_body);
+  fire_advance t
+
+let advance_request_queue_if_necessary t =
+  match t.current_request with
+  | None    ->
+    if not (Queue.is_empty t.request_queue) then
+      advance_request_queue t
+    else if Reader.is_closed t.reader then begin
+      shutdown t
+    end
+  | Some rd ->
+    if Rd.persistent_connection rd then begin
+      if Rd.is_complete rd then begin
+        t.current_request <- None;
+        fire_flush t
+      end;
+      if not (Queue.is_empty t.request_queue) then advance_request_queue t;
+    end else begin
+      drain_request_queue t;
+      if Rd.is_complete rd then begin
+        t.current_request <- None;
+        shutdown t;
+        fire_flush t;
+      end else if not (Rd.requires_input rd) then
+        shutdown_reader t
+    end
+
+let flush_request_body t next_read =
+  let flush () =
+    begin match t.current_request with
+    | None    -> ()
+    | Some rd -> Rd.flush_request_body rd
+    end
+  in
+  match next_read with
+  | `Close _ as close -> flush (); close
+  | `Read(buffer, k) ->
+    `Read(buffer, fun n ->
+      match k n with
+      | Ok () as result -> flush (); result
+      | error           -> error)
+
+let flush_response_body t =
+  match t.current_request with
+  | None    -> ()
+  | Some rd -> Rd.flush_response_body rd t.writer
+
+let rec next_read t =
+  advance_request_queue_if_necessary t;
+  match t.current_request with
+  | None    -> flush_request_body t (Reader.next t.reader)
+  | Some rd ->
+    if Rd.requires_input rd
+    then flush_request_body t (Reader.next t.reader)
+    else if Rd.persistent_connection rd
+    then `Yield (fun cb -> on_flush t cb)
+    else begin
+      shutdown_reader t;
+      next_read t
+    end
+
+let rec next_write t =
+  advance_request_queue_if_necessary t;
+  flush_response_body t;
+  match Writer.next t.writer with
+  | `Write _ | `Close _ as next -> next
+  | `Yield ->
+    begin match t.current_request with
+    | None    -> `Yield (fun cb -> on_advance t cb)
+    | Some rd ->
+      if Rd.requires_output rd
+      then `Yield (fun cb -> Rd.on_more_output_available rd cb)
+      else if Rd.persistent_connection rd
+      then `Yield (fun cb -> on_advance t cb)
+      else begin
+        shutdown t;
+        next_write t
+      end
+    end

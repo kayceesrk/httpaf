@@ -42,6 +42,8 @@
     vectorized IO. *)
 
 
+open Result
+
 (** {2 Basic HTTP Types} *)
 
 
@@ -593,4 +595,50 @@ module Body : sig
   val is_closed : _ t -> bool
   (** [is_closed t] is true if {close} has been called on [t] and [false]
       otherwise. A closed [t] may still have pending output. *)
+end
+
+
+module Connection : sig
+  module Config : sig
+    type t =
+      { read_buffer_size        : int (** Default is [4096] *)
+      ; write_buffer_size       : int (** Default is [4096] *)
+      }
+
+    val default : t
+    (** [default] is a configuration record with all parameters set to their
+        default values. *)
+  end
+
+  type t
+
+  type handler =
+    Request.t -> Body.R.t -> (Response.t -> Body.W.t) -> unit
+
+  val create : ?config:Config.t -> handler -> t
+  (** [create ?config handler] creates a connection handler that will service
+      individual requests with [handler]. *)
+
+  val next_read : t -> [
+    | `Read  of Bigstring.t * ([`Ok of int | `Eof] -> (unit, [`Invalid_read_length]) result)
+    | `Yield of (unit -> unit) -> unit
+    | `Close of (unit, [Status.t|`Parse of string list * string]) result
+    ]
+
+  val next_write : t -> [
+    | `Write of IOVec.buffer IOVec.t list * ([`Ok of int | `Closed] -> unit)
+    | `Yield of (unit -> unit) -> unit
+    | `Close of int
+    ]
+
+  val shutdown_reader : t -> unit
+  val shutdown : t -> unit
+
+  val state : t -> [ `Running | `Closed_input | `Closed ]
+  (** [state t] is the state of the connection's input and output processors. A
+      connection's input processor may be closed while it's output processor is
+      still running (corresponding to the [`Closed_input] state), but the
+      output processor can never be closed while in the input processor is
+      open. *)
+
 end
