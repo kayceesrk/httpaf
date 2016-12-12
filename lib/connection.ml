@@ -164,3 +164,90 @@ module Reader = struct
                 Error `Invalid_read_length
             | `Eof    -> close t; Ok ())
 end
+
+module Writer = struct
+  module F = Faraday
+
+  type t =
+    { buffer                : Bigstring.t
+      (* The buffer that the encoder uses for buffered writes. Managed by the
+       * control module for the encoder. *)
+    ; encoder               : F.t
+      (* The encoder that handles encoding for writes. Uses the [buffer]
+       * referenced above internally. *)
+    ; mutable closed        : bool
+      (* Whether the output source has left the building, indicating that no
+       * further output should be generated. *)
+    ; mutable drained_bytes : int
+      (* The number of bytes that were not written due to the output stream
+       * being closed before all buffered output could be written. Useful for
+       * detecting error cases. *)
+    }
+
+  let create ?(buffer_size=0x100) () =
+    let buffer = Bigstring.create buffer_size in
+    let encoder = F.of_bigstring buffer in
+    { buffer
+    ; encoder
+    ; closed        = false
+    ; drained_bytes = 0
+    }
+
+  let invariant t =
+    let (=>) a b = b || (not a) in
+    let (<=>) a b = (a => b) && (b => a) in
+    let writev, close, yield =
+      match F.operation t.encoder with
+      | `Writev _ -> true, false, false
+      | `Close    -> false, true, false
+      | `Yield    -> F.yield t.encoder; false, false, true
+    in
+    assert (t.closed <=> F.is_closed t.encoder);
+    assert (F.is_closed t.encoder <=> close);
+    assert (t.drained_bytes > 0 => t.closed);
+  ;;
+
+  let write_response t response =
+    Serialize.write_response t.encoder response
+
+  let schedule_fixed t iovecs =
+    (* XXX(seliopou): lots of closure allocation happening here, starting with
+     * the function passed to [List.iter] and then once for each [IOVec.t].
+     * Reconsider the type of the optional [free] argument in the faraday
+     * library. If it took the buffer together with an off and len, then that
+     * would eliminte the need for the closure allocations in the loop. *)
+    let s2b = Bytes.unsafe_of_string in
+    List.iter (fun { IOVec.buffer; off; len } ->
+      match buffer with
+      | `String str   -> F.schedule_bytes     t.encoder ~off ~len (s2b str)
+      | `Bytes bytes  -> F.schedule_bytes     t.encoder ~off ~len bytes
+      | `Bigstring bs -> F.schedule_bigstring t.encoder ~off ~len bs)
+    iovecs
+
+  let schedule_chunk t iovecs =
+    let len = Int64.of_int (IOVec.lengthv iovecs) in
+    F.write_string t.encoder (Printf.sprintf "%Lx\r\n" len);
+    schedule_fixed t iovecs
+
+  let flush t f =
+    F.flush t.encoder f
+
+  let close t =
+    t.closed <- true;
+    F.close t.encoder;
+    let drained = F.drain t.encoder in
+    t.drained_bytes <- t.drained_bytes + drained
+
+  let drained_bytes t =
+    t.drained_bytes
+
+  let next t =
+    match F.operation t.encoder with
+    | `Close -> `Close (drained_bytes t)
+    | `Yield -> `Yield
+    | `Writev iovecs ->
+      assert (not (t.closed));
+      `Write ((iovecs:IOVec.buffer IOVec.t list), function
+        | `Closed -> close t
+        | `Ok len -> F.shift t.encoder len)
+end
