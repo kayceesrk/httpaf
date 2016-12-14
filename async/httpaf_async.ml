@@ -2,31 +2,28 @@ open Core.Std
 open Async.Std
 
 
-let read_of_fd fd =
-  let badfd =
-    failwithf "read_of_fd got bad fd: %s" (Fd.to_string fd)
-  in
-  let finish result =
+let read fd buffer success =
+  let badfd fd = failwithf "read got back fd: %s" (Fd.to_string fd) () in
+  let rec finish fd buffer result =
     let open Unix.Error in
     match result with
-    | `Already_closed | `Ok 0 -> return `Eof
-    | `Ok n                   -> return (`Ok n)
+    | `Already_closed | `Ok 0 -> success `Eof
+    | `Ok n                   -> success (`Ok n)
     | `Error (Unix.Unix_error ((EWOULDBLOCK | EAGAIN), _, _)) ->
       begin Fd.ready_to fd `Read
-      >>| function
-        | `Bad_fd -> badfd ()
-        | `Closed -> `Eof
-        | `Ready  -> `Ok 0
+      >>= function
+        | `Bad_fd -> badfd fd
+        | `Closed -> success `Eof
+        | `Ready  -> go fd buffer
       end
     | `Error (Unix.Unix_error (EBADF, _, _)) ->
-      badfd ()
+      badfd fd
     | `Error exn ->
       Deferred.don't_wait_for (Fd.close fd);
       raise exn
-  in
-  let go buffer =
+  and go fd buffer  =
     if Fd.supports_nonblock fd then
-      finish
+      finish fd buffer
         (Fd.syscall fd ~nonblocking:true
           (fun file_descr ->
             Unix.Syscall_result.Int.ok_or_unix_error_exn ~syscall_name:"read"
@@ -34,16 +31,16 @@ let read_of_fd fd =
     else
       Fd.syscall_in_thread fd ~name:"read"
         (fun file_descr -> Bigstring.read file_descr buffer)
-      >>= finish
+      >>= fun result -> finish fd buffer result
   in
-  go
+  go fd buffer
+
 
 open Httpaf
 
 let create_connection_handler ?config ~request_handler =
   fun client_addr socket ->
     let fd     = Socket.fd socket in
-    let read   = read_of_fd fd in
     let writev = Faraday_async.writev_of_fd fd in
     let conn =
       Connection.create ?config (fun request request_body ->
@@ -60,9 +57,9 @@ let create_connection_handler ?config ~request_handler =
       match Connection.next_read_operation conn with
       | `Read buffer ->
         (* Log.Global.printf "read(%d)%!" (Fd.to_int_exn fd); *)
-        read buffer >>= fun result ->
-        Connection.report_read_result conn result;
-        reader_thread ()
+        read fd buffer (fun result ->
+          Connection.report_read_result conn result;
+          reader_thread ())
       | `Yield  ->
         (* Log.Global.printf "read_yield(%d)%!" (Fd.to_int_exn fd); *)
         let ivar = Ivar.create () in
