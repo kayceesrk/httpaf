@@ -29,7 +29,7 @@ let main port max_accepts_per_batch () =
   >>= fun server ->
   Deferred.forever () (fun () ->
     Clock.after Time.Span.(of_sec 0.5) >>| fun () ->
-      print_endline @@ "conns: "   ^ (string_of_int (Tcp.Server.num_connections server)));
+      Log.Global.printf "conns: %d" (Tcp.Server.num_connections server));
   Deferred.never ()
 
 let () =
