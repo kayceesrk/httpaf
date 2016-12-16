@@ -154,6 +154,7 @@ module Reader = struct
       | Error err as result -> `Close result
       end
     | AU.Fail(marks , message)  ->
+      Printf.printf "AU.Fail: %s\n%!" message;
       `Close (Error (`Parse(marks, message)))
     | AU.Partial { AU.committed } ->
       assert (committed = 0);
@@ -537,7 +538,9 @@ let report_write_result t result =
 
 let yield_writer t k =
   match t.current_request with
-  | None    -> on_advance t k
+  | None    -> 
+      Printf.printf "yield_writer.on_advance\n%!";
+      on_advance t k
   | Some rd ->
     if Rd.requires_output rd
     then Rd.on_more_output_available rd k

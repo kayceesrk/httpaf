@@ -46,14 +46,32 @@ Library httpaf_async
   Modules:
     Httpaf_async
 
+Library httpaf_effects
+  Path:           effects
+  Findlibname:    effects
+  Findlibparent:  httpaf
+  BuildDepends:   httpaf, faraday, core, aeio
+  NativeOpt:      -g
+  Modules:
+    Httpaf_effects
+
 Executable wrk_async_benchmark
   Path:             benchmarks
   MainIs:           wrk_async_benchmark.ml
-  Build:            true
+  Build$:           flag(async)
   NativeOpt:        -g
   CompiledObject:   best
   Install:          false
   BuildDepends:     httpaf.async, async, threads
+
+Executable wrk_effects_benchmark
+  Path:             benchmarks
+  MainIs:           wrk_effects_benchmark.ml
+  NativeOpt:        -g
+  CompiledObject:   best
+  Install:          false
+  BuildDepends:     httpaf.effects, aeio
+
 
 Executable test_angstrom
   Path:             lib_test
