@@ -63,47 +63,36 @@ let create_connection_handler ?config request_handler =
   fun fd client_addr ->
     let conn = Connection.create ?config (fun request request_body ->
       request_handler client_addr request request_body) in
+    let ctxt = Aeio.new_context () in
     let rec reader_thread () =
       match Connection.next_read_operation conn with          
       | `Read buffer -> 
-          Printf.printf "reader_thread.`Read\n%!";
-          begin try
-            let read_len = Aeio.Bigstring.read_all fd buffer in
-            for i = 0 to 140 
-            do
-              Printf.printf "%c" @@ Bigarray.Array1.get buffer i
-            done;
-            Printf.printf "reader_thread.`Read : read_len=%d\n%!" read_len;
+          let read_len = 
+            try Aeio.Bigstring.read_all fd buffer 
+            with e -> 
+              Printf.printf "reader_thread raised %s\n%!" @@ Printexc.to_string e;
+              Unix.(shutdown fd SHUTDOWN_RECEIVE); 
+              Aeio.cancel ctxt;
+              raise e
+          in
+          if read_len = 0 then begin
+            Connection.report_read_result conn `Eof;
+            Aeio.cancel ctxt
+          end else begin
             Connection.report_read_result conn (`Ok read_len);
             reader_thread ()
-          with e -> 
-            Printf.printf "reader_thread raised %s\n%!" @@ Printexc.to_string e;
-            Unix.close fd; 
-            raise e
           end
       | `Yield       -> 
-          Printf.printf "reader_thread.`Yield\n%!";
           let iv = Aeio.IVar.create () in
           Connection.yield_reader conn (Aeio.IVar.fill iv);
           Aeio.IVar.read iv;
-          Printf.printf "reader_thread.`Yield(2)\n%!";
           reader_thread ()
-      | `Close status -> 
-          Printf.printf "reader_thread.`Close\n%!";
-          begin match status with
-          | Result.Ok _ -> Printf.printf "reader_thread. `Close: OK\n%!"
-          | Result.Error (`Parse (sl, s)) -> 
-              List.iter (fun s -> Printf.printf "sl: %s\n%!" s) sl;
-              print_endline s
-          | _ -> Printf.printf "reader_thread. `Close: Other\n%!";
-          end;
-          Unix.(shutdown fd SHUTDOWN_RECEIVE)
+      | `Close status -> Unix.(shutdown fd SHUTDOWN_RECEIVE)
     in
     let rec writer_thread () =
       let success = Connection.report_write_result conn in
       match Connection.next_write_operation conn with
       | `Write iovecs -> 
-          Printf.printf "writer_thread.`Write\n%!";
           begin match take_group iovecs with
           | None -> success (`Ok 0)
           | Some (`String group, _) -> 
@@ -122,8 +111,8 @@ let create_connection_handler ?config request_handler =
             | Partial -> success (`Ok !written)
             | e ->
                 Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
-                Unix.close fd;
-                raise e
+                Unix.(shutdown fd SHUTDOWN_SEND);
+                Aeio.cancel ctxt
             end
           | Some (`Bigstring group, _) ->
             let iovecs = Array.of_list (List.rev_map (fun iovec ->
@@ -141,22 +130,18 @@ let create_connection_handler ?config request_handler =
             | Partial -> success (`Ok !written)
             | e ->
                 Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
-                Unix.close fd;
+                Unix.(shutdown fd SHUTDOWN_SEND);
                 raise e
             end
           end;
           writer_thread ()
       | `Yield        -> 
-          Printf.printf "writer_thread.`Yield\n%!";
           let iv = Aeio.IVar.create () in
           Connection.yield_writer conn (Aeio.IVar.fill iv);
           Aeio.IVar.read iv;
-          Printf.printf "writer_thread.`Yield(2)\n%!";
           writer_thread ()
       | `Close _      -> 
-          Printf.printf "writer_thread.`Close\n%!";
           Unix.(shutdown fd SHUTDOWN_SEND)
     in
-    let ctxt = Aeio.new_context () in
-    Aeio.async ~ctxt reader_thread ();
+    ignore @@ Aeio.async ~ctxt reader_thread ();
     Aeio.async ~ctxt writer_thread ()

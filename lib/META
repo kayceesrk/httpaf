@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: 3c63a176bd81bd95357b5810441b771d)
+# DO NOT EDIT (digest: 4d179db7128f18359dcc65c1b2900fb1)
 version = "dev"
 description =
 "A high-performance, memory-efficient, and scalable web server for OCaml."
@@ -13,7 +13,7 @@ package "effects" (
  version = "dev"
  description =
  "A high-performance, memory-efficient, and scalable web server for OCaml."
- requires = "httpaf faraday core aeio"
+ requires = "httpaf faraday aeio"
  archive(byte) = "httpaf_effects.cma"
  archive(byte, plugin) = "httpaf_effects.cma"
  archive(native) = "httpaf_effects.cmxa"

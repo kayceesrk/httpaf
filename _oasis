@@ -50,7 +50,7 @@ Library httpaf_effects
   Path:           effects
   Findlibname:    effects
   Findlibparent:  httpaf
-  BuildDepends:   httpaf, faraday, core, aeio
+  BuildDepends:   httpaf, faraday, aeio
   NativeOpt:      -g
   Modules:
     Httpaf_effects

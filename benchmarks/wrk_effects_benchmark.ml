@@ -21,7 +21,6 @@ let request_handler _ request request_body start_response =
   let response_body =
     match request.Request.target with
     | "/" ->
-      printf "request_handler: target is /\n%!";
       let response_body = start_response (Response.create ~headers `OK) in
       Body.schedule_bigstring response_body text;
       response_body
@@ -33,7 +32,7 @@ let request_handler _ request request_body start_response =
   Body.close response_body
 
 let main port max_accepts_per_batch () =
-  (* Server listens on localhost at 9301 *)
+  (* Server listens on localhost at 8080 *)
   let addr, port = Unix.inet_addr_loopback, port in
   printf "Echo server listening on 127.0.0.1:%d\n%!" port;
   let saddr = Unix.ADDR_INET (addr, port) in
@@ -56,4 +55,4 @@ let main port max_accepts_per_batch () =
   with
   | _ -> close ssock
 
-let _ = Aeio.run (main 9301 128) 
+let _ = Aeio.run (main 8080 128) 

@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: 06b4c1ee2f02175668ea323bdd097076)
+# DO NOT EDIT (digest: daf8d75797ce008a61820262ed92bc7f)
 # Ignore VCS directories, you can use the same kind of rule outside
 # OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
@@ -52,7 +52,6 @@ true: annot, bin_annot
 <effects/*.ml{,i,y}>: oasis_library_httpaf_effects_native
 <effects/*.ml{,i,y}>: pkg_aeio
 <effects/*.ml{,i,y}>: pkg_angstrom
-<effects/*.ml{,i,y}>: pkg_core
 <effects/*.ml{,i,y}>: pkg_faraday
 <effects/*.ml{,i,y}>: pkg_result
 <effects/*.ml{,i,y}>: use_httpaf
@@ -69,6 +68,7 @@ true: annot, bin_annot
 <benchmarks/wrk_async_benchmark.{native,byte}>: use_httpaf
 <benchmarks/wrk_async_benchmark.{native,byte}>: use_httpaf_async
 <benchmarks/*.ml{,i,y}>: pkg_async
+<benchmarks/*.ml{,i,y}>: pkg_core
 <benchmarks/*.ml{,i,y}>: pkg_faraday.async
 <benchmarks/*.ml{,i,y}>: pkg_threads
 <benchmarks/*.ml{,i,y}>: use_httpaf_async
@@ -77,14 +77,12 @@ true: annot, bin_annot
 <benchmarks/*.ml{,i,y}>: oasis_executable_wrk_effects_benchmark_native
 <benchmarks/wrk_effects_benchmark.{native,byte}>: pkg_aeio
 <benchmarks/wrk_effects_benchmark.{native,byte}>: pkg_angstrom
-<benchmarks/wrk_effects_benchmark.{native,byte}>: pkg_core
 <benchmarks/wrk_effects_benchmark.{native,byte}>: pkg_faraday
 <benchmarks/wrk_effects_benchmark.{native,byte}>: pkg_result
 <benchmarks/wrk_effects_benchmark.{native,byte}>: use_httpaf
 <benchmarks/wrk_effects_benchmark.{native,byte}>: use_httpaf_effects
 <benchmarks/*.ml{,i,y}>: pkg_aeio
 <benchmarks/*.ml{,i,y}>: pkg_angstrom
-<benchmarks/*.ml{,i,y}>: pkg_core
 <benchmarks/*.ml{,i,y}>: pkg_faraday
 <benchmarks/*.ml{,i,y}>: pkg_result
 <benchmarks/*.ml{,i,y}>: use_httpaf
