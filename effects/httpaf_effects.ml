@@ -71,12 +71,13 @@ let create_connection_handler ?config request_handler =
             try Aeio.Bigstring.read_all fd buffer 
             with e -> 
               Printf.printf "reader_thread raised %s\n%!" @@ Printexc.to_string e;
-              Unix.(shutdown fd SHUTDOWN_RECEIVE); 
+              Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
               Aeio.cancel ctxt;
               raise e
           in
           if read_len = 0 then begin
             Connection.report_read_result conn `Eof;
+            Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
             Aeio.cancel ctxt
           end else begin
             Connection.report_read_result conn (`Ok read_len);
@@ -84,10 +85,10 @@ let create_connection_handler ?config request_handler =
           end
       | `Yield       -> 
           let iv = Aeio.IVar.create () in
-          Connection.yield_reader conn (Aeio.IVar.fill iv);
+          Connection.yield_reader conn @@ Aeio.IVar.fill iv;
           Aeio.IVar.read iv;
           reader_thread ()
-      | `Close status -> Unix.(shutdown fd SHUTDOWN_RECEIVE)
+      | `Close status -> Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE
     in
     let rec writer_thread () =
       let success = Connection.report_write_result conn in
@@ -110,8 +111,7 @@ let create_connection_handler ?config request_handler =
             with
             | Partial -> success (`Ok !written)
             | e ->
-                Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
-                Unix.(shutdown fd SHUTDOWN_SEND);
+                Aeio.shutdown fd Unix.SHUTDOWN_SEND;
                 Aeio.cancel ctxt
             end
           | Some (`Bigstring group, _) ->
@@ -130,18 +130,18 @@ let create_connection_handler ?config request_handler =
             | Partial -> success (`Ok !written)
             | e ->
                 Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
-                Unix.(shutdown fd SHUTDOWN_SEND);
+                Aeio.shutdown fd Unix.SHUTDOWN_SEND;
                 raise e
             end
           end;
           writer_thread ()
       | `Yield        -> 
           let iv = Aeio.IVar.create () in
-          Connection.yield_writer conn (Aeio.IVar.fill iv);
+          Connection.yield_writer conn @@ Aeio.IVar.fill iv;
           Aeio.IVar.read iv;
           writer_thread ()
       | `Close _      -> 
-          Unix.(shutdown fd SHUTDOWN_SEND)
+          Aeio.shutdown fd Unix.SHUTDOWN_SEND
     in
     ignore @@ Aeio.async ~ctxt reader_thread ();
-    Aeio.async ~ctxt writer_thread ()
+    ignore @@ Aeio.async ~ctxt writer_thread ()

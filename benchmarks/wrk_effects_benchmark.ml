@@ -36,23 +36,28 @@ let main port max_accepts_per_batch () =
   let addr, port = Unix.inet_addr_loopback, port in
   printf "Echo server listening on 127.0.0.1:%d\n%!" port;
   let saddr = Unix.ADDR_INET (addr, port) in
-  let ssock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-  (* SO_REUSEADDR so we can restart the server quickly. *)
-  Unix.setsockopt ssock Unix.SO_REUSEADDR true;
-  Unix.bind ssock saddr;
-  Unix.listen ssock 20; 
-  (* Socket is non-blocking *)
-  Unix.set_nonblock ssock;
+  let ssock = Aeio.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  let ssock_unix = Aeio.get_unix_fd ssock in
+
+  (* configure socket *)
+  Unix.setsockopt ssock_unix Unix.SO_REUSEADDR true;
+  Unix.bind ssock_unix saddr;
+  Unix.listen ssock_unix 2; 
+  Aeio.set_nonblock ssock;
+
   try 
     (* Wait for clients, and fork off echo servers. *)
     while true do
       let client_sock, client_addr = Aeio.accept ssock in
-      let cn = string_of_sockaddr client_addr in
-      printf "server : client (%s) connected.\n%!" cn; 
-      Unix.set_nonblock client_sock;
-      ignore @@ Aeio.async (fun () -> create_connection_handler request_handler client_sock client_addr) ()
+      Aeio.set_nonblock client_sock;
+      create_connection_handler request_handler client_sock client_addr
     done
   with
-  | _ -> close ssock
+  | e ->
+      Printf.printf "main: %s\n%!" @@ Printexc.to_string e;
+      Aeio.close ssock
 
-let _ = Aeio.run (main 8080 128) 
+let _ = 
+  try Aeio.run ~engine:`Select (main 8080 128) 
+  with e -> ()
+    
