@@ -79,9 +79,9 @@ let create_connection_handler ?config request_handler =
           let read_len = 
             try Aeio.Bigstring.read_all fd buffer 
             with e -> 
-              Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
-              Aeio.cancel ctxt;
-              raise e
+              ( Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
+                Aeio.cancel ctxt;
+                raise e )
           in
           if read_len = 0 then begin
             dprintf "reader_thread.`Read: `Eof\n%!";
@@ -129,8 +129,8 @@ let create_connection_handler ?config request_handler =
             with
             | Partial -> success (`Ok !written)
             | e ->
-                Aeio.shutdown fd Unix.SHUTDOWN_SEND;
-                Aeio.cancel ctxt
+                ( Aeio.shutdown fd Unix.SHUTDOWN_SEND;
+                  Aeio.cancel ctxt )
             end
           | Some (`Bigstring group, _) ->
             let iovecs = Array.of_list (List.rev_map (fun iovec ->
@@ -151,9 +151,9 @@ let create_connection_handler ?config request_handler =
                 dprintf "writer_thread.`Write: `Ok %d\n%!" !written;
                 success (`Ok !written)
             | e ->
-                Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
-                Aeio.shutdown fd Unix.SHUTDOWN_SEND;
-                raise e
+                ( Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
+                  Aeio.shutdown fd Unix.SHUTDOWN_SEND;
+                  raise e )
             end
           end;
           writer_thread ()
