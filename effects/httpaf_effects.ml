@@ -1,5 +1,14 @@
 open Httpaf
 
+let debug = false
+
+let dprintf s = 
+  if debug then begin
+    Printf.printf "[%d] " (Aeio.get_tid ());
+    Printf.printf s
+  end else
+    Printf.ifprintf stdout s
+
 exception Partial
 
 let take_group iovecs =
@@ -70,22 +79,28 @@ let create_connection_handler ?config request_handler =
           let read_len = 
             try Aeio.Bigstring.read_all fd buffer 
             with e -> 
-              Printf.printf "reader_thread raised %s\n%!" @@ Printexc.to_string e;
               Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
               Aeio.cancel ctxt;
               raise e
           in
           if read_len = 0 then begin
+            dprintf "reader_thread.`Read: `Eof\n%!";
             Connection.report_read_result conn `Eof;
             Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
             Aeio.cancel ctxt
           end else begin
+            dprintf "reader_thread.`Read: `Ok %d\n%!" read_len;
             Connection.report_read_result conn (`Ok read_len);
             reader_thread ()
           end
       | `Yield       -> 
+          dprintf "reader_thread.`Read: `Yield\n%!";
+          let tid = 0xBAD in
+(*           let tid = Aeio.get_tid () in *)
           let iv = Aeio.IVar.create () in
-          Connection.yield_reader conn @@ Aeio.IVar.fill iv;
+          Connection.yield_reader conn (fun () ->
+            dprintf "Connection.wakeup reader thread %d\n%!" tid;
+            Aeio.IVar.fill iv ());
           Aeio.IVar.read iv;
           reader_thread ()
       | `Close status -> Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE
@@ -95,12 +110,15 @@ let create_connection_handler ?config request_handler =
       match Connection.next_write_operation conn with
       | `Write iovecs -> 
           begin match take_group iovecs with
-          | None -> success (`Ok 0)
+          | None -> 
+              dprintf "writer_thread.`Write: `Ok 0\n%!";
+              success (`Ok 0)
           | Some (`String group, _) -> 
             let iovecs = Array.of_list (List.rev_map (fun iovec ->
               let { Faraday.buffer; off = pos; len } = iovec in
               unix_iovec_of_string ~pos ~len buffer) group)
             in 
+            (* TODO: Aeio.writev *)
             let written = ref 0 in
             begin try
               Array.iter (fun {Faraday.buffer; off; len} -> 
@@ -119,15 +137,19 @@ let create_connection_handler ?config request_handler =
               let { Faraday.buffer; off = pos; len } = iovec in
               unix_iovec_of_bigstring ~pos ~len buffer) group)
             in 
+            (* TODO: Aeio.writev *)
             let written = ref 0 in
             begin try
               Array.iter (fun {Faraday.buffer; off; len} -> 
                 let w = Aeio.Bigstring.write fd buffer off len in
                 written := !written + w;
                 if w < len then raise Partial) iovecs;
+              dprintf "writer_thread.`Write: `Ok %d\n%!" !written;
               success (`Ok !written)
             with
-            | Partial -> success (`Ok !written)
+            | Partial -> 
+                dprintf "writer_thread.`Write: `Ok %d\n%!" !written;
+                success (`Ok !written)
             | e ->
                 Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
                 Aeio.shutdown fd Unix.SHUTDOWN_SEND;
@@ -136,8 +158,13 @@ let create_connection_handler ?config request_handler =
           end;
           writer_thread ()
       | `Yield        -> 
+          dprintf "writer_thread.`Write: `Yield\n%!";
+          let tid = 0xBAD in
+(*           let tid = Aeio.get_tid () in *)
           let iv = Aeio.IVar.create () in
-          Connection.yield_writer conn @@ Aeio.IVar.fill iv;
+          Connection.yield_writer conn (fun () ->
+            dprintf "Connection.wakeup writer thread %d\n%!" tid;
+            Aeio.IVar.fill iv ());
           Aeio.IVar.read iv;
           writer_thread ()
       | `Close _      -> 

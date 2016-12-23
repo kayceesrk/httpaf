@@ -41,14 +41,16 @@ let main port max_accepts_per_batch () =
 
   (* configure socket *)
   Unix.setsockopt ssock_unix Unix.SO_REUSEADDR true;
+  Unix.setsockopt ssock_unix Unix.TCP_NODELAY true;
   Unix.bind ssock_unix saddr;
-  Unix.listen ssock_unix 2; 
+  Unix.listen ssock_unix 128; 
   Aeio.set_nonblock ssock;
 
   try 
     (* Wait for clients, and fork off echo servers. *)
     while true do
       let client_sock, client_addr = Aeio.accept ssock in
+      Unix.setsockopt (Aeio.get_unix_fd client_sock) Unix.TCP_NODELAY true;
       Aeio.set_nonblock client_sock;
       create_connection_handler request_handler client_sock client_addr
     done
@@ -58,6 +60,6 @@ let main port max_accepts_per_batch () =
       Aeio.close ssock
 
 let _ = 
-  try Aeio.run ~engine:`Select (main 8080 128) 
+  try Aeio.run ~engine:`Libev (main 8080 128) 
   with e -> ()
     
