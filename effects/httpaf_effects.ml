@@ -72,31 +72,26 @@ let create_connection_handler ?config request_handler =
   fun fd client_addr ->
     let conn = Connection.create ?config (fun request request_body ->
       request_handler client_addr request request_body) in
-    let ctxt = Aeio.new_context () in
     let rec reader_thread () =
       match Connection.next_read_operation conn with          
       | `Read buffer -> 
-          let read_len = 
-            try Aeio.Bigstring.read_all fd buffer 
-            with e -> 
-              ( Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
-                Aeio.cancel ctxt;
-                raise e )
-          in
-          if read_len = 0 then begin
-            dprintf "reader_thread.`Read: `Eof\n%!";
-            Connection.report_read_result conn `Eof;
-            Aeio.shutdown fd Unix.SHUTDOWN_RECEIVE; 
-            Aeio.cancel ctxt
-          end else begin
-            dprintf "reader_thread.`Read: `Ok %d\n%!" read_len;
-            Connection.report_read_result conn (`Ok read_len);
-            reader_thread ()
-          end
+          begin try 
+            let read_len = 
+              Aeio.Bigstring.read_all fd buffer 
+            in
+            if read_len = 0 then begin
+              dprintf "reader_thread.`Read: `Eof\n%!";
+              Connection.report_read_result conn `Eof;
+            end else begin
+              dprintf "reader_thread.`Read: `Ok %d\n%!" read_len;
+              Connection.report_read_result conn (`Ok read_len);
+            end
+          with e -> Connection.report_read_result conn `Eof
+          end;
+          reader_thread ()
       | `Yield       -> 
           dprintf "reader_thread.`Read: `Yield\n%!";
-          let tid = 0xBAD in
-(*           let tid = Aeio.get_tid () in *)
+          let tid = if debug then Aeio.get_tid () else 0xC0FFEE in
           let iv = Aeio.IVar.create () in
           Connection.yield_reader conn (fun () ->
             dprintf "Connection.wakeup reader thread %d\n%!" tid;
@@ -128,9 +123,7 @@ let create_connection_handler ?config request_handler =
               success (`Ok !written)
             with
             | Partial -> success (`Ok !written)
-            | e ->
-                ( Aeio.shutdown fd Unix.SHUTDOWN_SEND;
-                  Aeio.cancel ctxt )
+            | e -> success `Closed
             end
           | Some (`Bigstring group, _) ->
             let iovecs = Array.of_list (List.rev_map (fun iovec ->
@@ -150,25 +143,20 @@ let create_connection_handler ?config request_handler =
             | Partial -> 
                 dprintf "writer_thread.`Write: `Ok %d\n%!" !written;
                 success (`Ok !written)
-            | e ->
-                ( Printf.printf "writer_thread raised %s\n%!" @@ Printexc.to_string e;
-                  Aeio.shutdown fd Unix.SHUTDOWN_SEND;
-                  raise e )
+            | e -> success `Closed
             end
           end;
           writer_thread ()
       | `Yield        -> 
           dprintf "writer_thread.`Write: `Yield\n%!";
-          let tid = 0xBAD in
-(*           let tid = Aeio.get_tid () in *)
+          let tid = if debug then Aeio.get_tid () else 0xC0FFEE in
           let iv = Aeio.IVar.create () in
           Connection.yield_writer conn (fun () ->
             dprintf "Connection.wakeup writer thread %d\n%!" tid;
             Aeio.IVar.fill iv ());
           Aeio.IVar.read iv;
           writer_thread ()
-      | `Close _      -> 
-          Aeio.shutdown fd Unix.SHUTDOWN_SEND
+      | `Close _      -> Aeio.shutdown fd Unix.SHUTDOWN_SEND
     in
-    ignore @@ Aeio.async ~ctxt reader_thread ();
-    ignore @@ Aeio.async ~ctxt writer_thread ()
+    ignore @@ Aeio.async reader_thread ();
+    ignore @@ Aeio.async writer_thread ()

@@ -37,7 +37,7 @@ let main port max_accepts_per_batch () =
     Printf.printf "Live asyncs=%d\n%!" @@ Aeio.live_async ();
     looper ()
   in
-  ignore @@ Aeio.async looper ();
+(*   ignore @@ Aeio.async looper (); *)
   (* Server listens on localhost at 8080 *)
   let addr, port = Unix.inet_addr_loopback, port in
   printf "Echo server listening on 127.0.0.1:%d\n%!" port;
@@ -66,6 +66,6 @@ let main port max_accepts_per_batch () =
       Aeio.close ssock
 
 let _ = 
-  try Aeio.run ~engine:`Select (main 8080 128) 
+  try Aeio.run ~engine:`Libev (main 8080 128) 
   with e -> ()
     
